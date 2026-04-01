@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ggtools = { git = "https://github.com/i3667563-dot/ggtools" }
+ggtools = { git = "https://github.com/yourusername/ggtools" }
 ```
 
 ## Usage

@@ -1,6 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::io::{self, ErrorKind};
+use std::io::{self, BufRead, ErrorKind};
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -15,8 +15,10 @@ struct Message {
 }
 
 #[derive(Deserialize)]
-struct ChatResponse {
+struct StreamResponse {
     message: ResponseMessage,
+    #[serde(default)]
+    done: bool,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +47,17 @@ impl Ollama {
     }
 
     pub async fn prompt(&self, model: &str, message: &str) -> Result<String, io::Error> {
+        let mut full_response = String::new();
+        self.prompt_stream(model, message, |chunk| {
+            full_response.push_str(&chunk);
+        }).await?;
+        Ok(full_response)
+    }
+
+    pub async fn prompt_stream<F>(&self, model: &str, message: &str, mut callback: F) -> Result<(), io::Error>
+    where
+        F: FnMut(String) + Send,
+    {
         let request = ChatRequest {
             model: model.to_string(),
             messages: vec![Message {
@@ -64,12 +77,18 @@ impl Ollama {
             return Err(io::Error::new(ErrorKind::Other, "Request failed"));
         }
 
-        let chat_response: ChatResponse = response
-            .json()
+        let body = response
+            .text()
             .await
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
 
-        Ok(chat_response.message.content)
+        for line in body.lines() {
+            if let Ok(stream_resp) = serde_json::from_str::<StreamResponse>(line) {
+                callback(stream_resp.message.content);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -91,4 +110,24 @@ pub fn prompt_to(url: &str, model: &str, message: &str) -> Result<String, io::Er
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(ollama.prompt(model, message))
+}
+
+pub fn prompt_stream<F>(model: &str, message: &str, callback: F) -> Result<(), io::Error>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    let ollama = Ollama::new();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(ollama.prompt_stream(model, message, callback))
+}
+
+pub fn prompt_stream_to<F>(url: &str, model: &str, message: &str, callback: F) -> Result<(), io::Error>
+where
+    F: FnMut(String) + Send + 'static,
+{
+    let ollama = Ollama::with_url(url);
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(ollama.prompt_stream(model, message, callback))
 }
